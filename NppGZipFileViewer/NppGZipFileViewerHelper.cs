@@ -61,7 +61,7 @@ namespace NppGZipFileViewer
 
         internal static MemoryStream Decode(Stream gzStream)
         {
-            using GZipStream decoder = new GZipStream(gzStream, CompressionMode.Decompress, true);
+            using var decoder = new ICSharpCode.SharpZipLib.GZip.GZipInputStream(gzStream);
             MemoryStream decodedStream = new MemoryStream();
             decoder.CopyTo(decodedStream);
             return decodedStream;
@@ -83,10 +83,11 @@ namespace NppGZipFileViewer
 
         internal static Encoding SetDecodedText(MemoryStream decodedContentStream)
         {
-            NotepadPPGateway nppGateway = new NotepadPPGateway();
             ScintillaGateway scintillaGateway = new ScintillaGateway(PluginBase.GetCurrentScintilla());
-           
-            //var encoding = nppGateway.GetBufferEncoding(nppGateway.GetCurrentBufferId());
+
+            scintillaGateway.ClearAll();
+            scintillaGateway.SetCodePage(65001);
+            var destEncoding = new UTF8Encoding(false);
 
             decodedContentStream.Position = 0;
             byte[] bom = new byte[Math.Min(4, decodedContentStream.Length)];
@@ -114,14 +115,31 @@ namespace NppGZipFileViewer
                     break;
             }
 
-            byte[] buffer = Encoding.Convert(srcEncoding, new UTF8Encoding(false), decodedContentStream.GetBuffer(), 0, (int)decodedContentStream.Length);
-            
-            var pinnedArray = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+            var decoder = srcEncoding.GetDecoder();
+            var encoder = destEncoding.GetEncoder();
+            byte[] inBuffer = new byte[Math.Min(32 * 1024 * 1024, decodedContentStream.Length)];
 
-            Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_CLEARALL, 0, 0);
-            scintillaGateway.SetCodePage(65001);
-            Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_ADDTEXT, buffer.Length, pinnedArray.AddrOfPinnedObject());
-            pinnedArray.Free();
+            while (true)
+            {
+                int readBytes = decodedContentStream.Read(inBuffer, 0, inBuffer.Length);
+                bool flush = decodedContentStream.Position == decodedContentStream.Length;
+
+                char[] chars = new char[decoder.GetCharCount(inBuffer, 0, readBytes)];
+                int decodedChars = decoder.GetChars(inBuffer, 0, readBytes, chars, 0, flush);
+
+                byte[] outBuffer = new byte[encoder.GetByteCount(chars, 0, decodedChars, flush)];
+                int encodedBytes = encoder.GetBytes(chars, 0, decodedChars, outBuffer, 0, flush);
+
+                if (encodedBytes > 0)
+                {
+                    var pinnedArray = GCHandle.Alloc(outBuffer, GCHandleType.Pinned);
+                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_ADDTEXT, encodedBytes, pinnedArray.AddrOfPinnedObject());
+                    pinnedArray.Free();
+                }
+
+                if (flush) break;
+            }
+
             return srcEncoding;
         }
 
