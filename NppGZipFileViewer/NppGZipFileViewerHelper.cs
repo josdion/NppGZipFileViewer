@@ -115,6 +115,14 @@ namespace NppGZipFileViewer
                     break;
             }
 
+            if (destEncoding.Equals(srcEncoding))
+            {
+                var pinnedArray = GCHandle.Alloc(decodedContentStream.GetBuffer(), GCHandleType.Pinned);
+                Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_ADDTEXT, (int)decodedContentStream.Length, pinnedArray.AddrOfPinnedObject());
+                pinnedArray.Free();
+                return srcEncoding;
+            }
+
             var decoder = srcEncoding.GetDecoder();
             var encoder = destEncoding.GetEncoder();
             byte[] inBuffer = new byte[Math.Min(32 * 1024 * 1024, decodedContentStream.Length)];
